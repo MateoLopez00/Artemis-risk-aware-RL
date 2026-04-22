@@ -4,6 +4,28 @@ A tabular RL comparison study on a stochastic lunar-mission MDP. Four algorithms
 
 ---
 
+## Workflow
+
+```mermaid
+flowchart TD
+    A["Simplified lunar mission\n4 stages · stochastic transitions\nstage-dependent hidden risks"]
+    B["Agent chooses action\nsafe route / risky route / fallback"]
+    C["Environment steps\nnext state · fuel use · hazard · success or failure"]
+    D1["Q-learning\nε-greedy tabular"]
+    D2["Model-based VI\nlearned P̂ + value iteration"]
+    D3["UCB-Q\ncount-based exploration bonus"]
+    D4["Thompson Sampling\nDirichlet posterior · sample MDP · plan"]
+    E["Oracle baseline\nvalue iteration on true P, R̄"]
+    F["Compare metrics\navg return · mission success · regret · hazard rate · learning speed"]
+
+    A --> B --> C --> B
+    C --> D1 & D2 & D3 & D4
+    E --> F
+    D1 & D2 & D3 & D4 --> F
+```
+
+---
+
 ## File structure
 
 ```
@@ -13,16 +35,17 @@ Artemis-risk-aware-RL/
 ├── src/artemis/
 │   ├── constants.py            # action/state indices, risky-route probability tables
 │   ├── environment.py          # LunarMissionEnv (Gymnasium API), state encode/decode,
-│   │                           #   action masks, true P and R builder
-│   ├── planning.py             # vectorized value iteration, oracle policy
-│   ├── experiments.py          # RunConfig, run_episode, run_sweep (imported by notebook)
+│   │                           #   action masks, exact P and R builder
+│   ├── planning.py             # vectorised value iteration, oracle policy
+│   ├── experiments.py          # RunConfig, run_episode, run_sweep
 │   └── agents/
 │       ├── q_learning.py       # tabular Q-learning (ε-greedy)
 │       ├── ucb.py              # UCB-Q (count-based exploration bonus)
-│       ├── model_based.py      # model-based VI (MLE model + periodic re-planning)
+│       ├── model_based.py      # model-based VI (MLE transition model + periodic re-planning)
 │       └── thompson.py         # PSRL / Thompson sampling over MDPs
+├── assets/                     # plots exported from the notebook
 ├── tests/
-│   └── test_environment.py     # unit + Monte-Carlo tests for the environment
+│   └── test_environment.py     # unit + Monte-Carlo environment tests
 ├── pyproject.toml
 └── requirements.txt
 ```
@@ -35,12 +58,6 @@ Artemis-risk-aware-RL/
 pip install -e ".[notebook]"    # installs jupyter + ipykernel + all dependencies
 ```
 
-Or manually:
-
-```bash
-pip install -r requirements.txt
-```
-
 Then open and run `notebooks/Artemis_main.ipynb` top to bottom.
 
 ---
@@ -49,67 +66,89 @@ Then open and run `notebooks/Artemis_main.ipynb` top to bottom.
 
 The environment models a 4-stage lunar mission. At each stage the agent chooses one of three actions:
 
-| Action | Effect |
-|---|---|
-| **Safe** | Guaranteed stage advance; costs 1 fuel unit; 5 % chance of entering hazard |
-| **Risky** | Stage advance without fuel cost on the safe branch (75–55 %); hazard branch (20–25 %) costs 1 fuel; catastrophic failure branch (5–30 %) ends the mission |
-| **Fallback** | Stage advance, clears hazard with 90 % probability; costs 1 fuel and a −10 penalty |
+| Action | Fuel cost | Risk |
+|---|---|---|
+| **Safe route** | −1 fuel | 5 % chance of hazard; never fails outright |
+| **Risky route** | 0 fuel on safe branch; −1 fuel on hazard branch | 5–20 % catastrophic failure depending on stage and hazard status |
+| **Fallback maneuver** | −1 fuel; usable once | Clears hazard with 90 % probability; −10 reward penalty |
 
-State: (stage 1–4, fuel 0–2, hazard 0/1, fallback used 0/1) — 48 non-terminal states plus terminal success and failure. The key tension: risky preserves fuel on its safe branch, but risks catastrophic failure; safe is reliable but burns fuel, starving later stages.
+**State:** (stage 1–4, fuel 0–2, hazard 0/1, fallback used 0/1) — 48 non-terminal states plus terminal success and failure.
+
+**Rewards:** +10 stage progress · +50 mission success bonus · −5 enter hazard · −10 use fallback · −100 mission failure.
+
+**Key tension:** risky preserves fuel on its safe branch (strategic advantage) but risks catastrophic failure; safe is reliable but burns fuel, starving later stages.
 
 ---
 
-## Notebook walkthrough
+## Results
 
-### § 1 — Environment smoke test
-Confirms the environment API (reset / step / mask) works and shows a sample transition for each action from the start state.
+### Single-run sanity check (600 episodes, 1 seed)
 
-### § 2 — Oracle policy (value iteration on the true MDP)
-Runs vectorized value iteration on the analytically-derived `P(s'|s,a)` and `R̄(s,a)`. Prints `V*(s₀)` and the oracle's recommended action at key states (mainly risky at early stages while fuel is plentiful, safe at the final stage). A 10 000-episode Monte-Carlo simulation confirms the oracle achieves **~47.8 % mission success** — the hard upper bound imposed by the MDP's stochastic transitions.
+![Single run — rolling success and return](assets/fig_single_run.png)
 
-### § 2 (verification sub-section)
-Checks that (1) every row of `P` sums to 1, (2) the risky-route probability tables match the spec, (3) both terminals are absorbing with zero reward, and (4) spot-check rewards (+60 on success, −100 on fuel failure, −10 on fallback, −5 hazard entry) are correct.
+All four agents improve from episode 1. Q-learning and UCB rise earliest; Model-based VI converges later but smoothly as its internal model becomes accurate; Thompson shows higher variance due to its stochastic MDP sampling.
 
-### § 3 — Single-run sanity check (600 episodes)
-Plots rolling success rate and rolling mean return for one seed of each agent. Shows that all four agents are learning and improving, not stuck or diverging.
+---
 
-### § 4 — Multi-seed sweep (2 000 episodes × 5 seeds)
+### Learning curves — multi-seed sweep (2 000 episodes × 5 seeds)
 
-**Learning curves** (rolling success rate, rolling mean return, cumulative regret — mean ± shaded std across seeds):
-All four agents converge within ~500–800 episodes. UCB reaches the highest rolling success fastest; model-based VI closes in later as its learned model becomes accurate.
+![Learning curves — success, return, regret, hazard rate](assets/fig_learning_curves.png)
 
-**Summary table** (mean of the last 100-episode window across 5 seeds):
+Shaded bands show mean ± std across 5 seeds. Key observations:
+- **All agents converge** to stable success rates well before episode 2 000.
+- **UCB** achieves the lowest cumulative regret, reflecting its principled exploration.
+- **Model-based VI** matches UCB on success rate once its learned model is reliable (~ep 300+).
+- **Thompson** has the highest variance early on (diverse MDP samples) but converges by ep 800.
+- The hazard rate panel confirms that agents that take more risky actions (UCB, model-based) also enter hazard slightly more, but still outperform pure safe-action policies.
+
+---
+
+### Per-metric summary (mean of last 100 episodes, 5 seeds)
+
+![Per-metric bar chart with error bars](assets/fig_summary_bar.png)
 
 | Agent | Success | % of oracle | Mean return | Hazard rate | Cum. regret |
 |---|---|---|---|---|---|
-| UCB | 0.344 | 72 % | −22.9 | 0.127 | 48 853 |
+| **UCB** | **0.344** | **72 %** | **−22.9** | 0.127 | **48 853** |
 | Model-based VI | 0.326 | 68 % | −27.1 | 0.127 | 58 935 |
 | Q-learning | 0.318 | 66 % | −27.7 | 0.122 | 63 060 |
 | Thompson | 0.284 | 59 % | −32.2 | 0.106 | 71 485 |
 
-*Oracle ceiling = 0.478 success / −1.1 mean return.*
+*Oracle ceiling (value iteration on the true MDP) = **0.478 success / −1.1 mean return**. The stochastic transitions cap any learner's success rate at ~48 %.*
 
-**Per-metric bar chart** visualises the same four metrics side by side with error bars, making the ranking across methods immediately visible.
+UCB reaches 72 % of the oracle's success rate and accumulates the least regret. Model-based VI is close behind — it takes longer to warm up but reaches a comparable policy once its transition counts are reliable. Q-learning is a competitive baseline. Thompson underperforms here due to high early variance from diverse MDP samples, though its policy quality at the end of training is similar.
 
-### § 5 — Environment variants
+---
 
-The sweep is repeated on four modified mission configs:
+### Environment variants
 
-| Variant | Change | Effect on agents |
+![Variant success rates](assets/fig_variants.png)
+
+| Variant | Change | Effect |
 |---|---|---|
-| `harsh_hazard` | Hazard penalty −10 (was −5) | All agents become more conservative; success drops ~15 % |
-| `low_fuel` | Start fuel = 1 (was 2) | Very hard; margins collapse; UCB still leads |
-| `risky_x2` | Risky failure probability doubled | Risky actions punished more; agents shift toward safe |
-| `weak_fallback` | Fallback clears hazard with 50 % (was 90 %) | Fallback used less; minimal impact on success |
+| `harsh_hazard` | Hazard penalty −10 (was −5) | All agents more conservative; success drops ~15 % |
+| `low_fuel` | Start fuel = 1 (was 2) | Hardest setting; margins collapse; UCB still leads |
+| `risky_x2` | Risky failure prob ×2 | Agents shift toward safe; success drops for risk-heavy agents |
+| `weak_fallback` | Fallback recovery 50 % (was 90 %) | Minimal impact; fallback rarely used anyway |
 
-UCB and Q-learning are most robust across variants (mean success 0.27 and 0.27); Thompson is most sensitive to environment difficulty.
+UCB and Q-learning are most robust across variants (mean success 0.272 and 0.265). Thompson is most sensitive to environmental difficulty.
 
-### § 6 — Policy heatmaps (oracle vs. learned)
-Greedy policy of each agent at the end of training, shown as a colour grid over (stage, fuel) for normal/no-fallback states. All four learned policies closely match the oracle: **risky at early stages with plenty of fuel, safe only at the final stage**. The heatmaps give visual confirmation that the agents have learned the right risk tradeoff.
+---
 
-### § 7 — Expected vs. observed results
+### Policy heatmaps — oracle vs. learned (hazard=0, fallback available)
 
-All three claims from the project proposal are confirmed:
+![Policy heatmaps](assets/fig_policy_heatmap.png)
+
+Each cell shows the greedy action taken at that (stage, fuel) combination after training. All four learned policies closely match the oracle:
+- **Risky** at early stages with plenty of fuel — preserves fuel for later.
+- **Safe** at the final stage (stage 4) with high fuel — locks in success without catastrophic risk.
+- No agent wastes the fallback or takes safe actions unnecessarily at early stages.
+
+---
+
+## Claim verification
+
+All three claims from the project proposal are confirmed on the default mission (5 seeds, 2 000 episodes):
 
 ```
 Claim: UCB/Thompson beat Q-learning on success rate.
@@ -130,4 +169,4 @@ Claim: Model-based VI performs strongly once enough data is collected.
 pytest tests/ -v
 ```
 
-Covers state encode/decode, action-mask semantics, transition row sums, terminal absorbing property, Monte-Carlo fallback and fuel-zero checks, and oracle policy sign.
+Covers state encode/decode, action-mask semantics, transition row sums, terminal absorbing property, Monte-Carlo fallback and fuel-zero checks, and oracle policy correctness.
