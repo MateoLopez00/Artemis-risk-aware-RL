@@ -1,0 +1,54 @@
+Metadata-Version: 2.4
+Name: artemis-risk-aware-rl
+Version: 0.1.0
+Summary: Tabular RL for a lunar mission MDP (course project)
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24
+Requires-Dist: gymnasium>=0.29
+Requires-Dist: matplotlib>=3.7
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Provides-Extra: notebook
+Requires-Dist: jupyter; extra == "notebook"
+Requires-Dist: ipykernel; extra == "notebook"
+
+# Artemis risk-aware RL
+
+Tabular reinforcement-learning comparison on a small lunar-mission MDP (safe / risky / fallback). Code lives under `src/artemis/` as importable modules; the **main workflow** is the Jupyter notebook (no CLI required).
+
+## Install
+
+```bash
+pip install -e ".[dev]"          # + pytest
+pip install -e ".[notebook]"     # + jupyter, ipykernel
+```
+
+(Or: `PYTHONPATH=src` and install `numpy`, `gymnasium`, `matplotlib` from `requirements.txt`.)
+
+## Main entry: notebook
+
+Open and run (top to bottom):
+
+[`notebooks/Artemis_main.ipynb`](notebooks/Artemis_main.ipynb)
+
+It steps through: environment, true `P, R̄`, value iteration & oracle, all four agents, plots, multi-seed aggregation, mission variants, and optional JSON/figure export to `results/`.
+
+## Tests (library checks)
+
+```bash
+pytest tests/ -v
+```
+
+## Code map
+
+- `src/artemis/environment.py` — `LunarMissionEnv`, `get_transition_model_and_reward`, masks
+- `src/artemis/planning.py` — discounted value iteration, oracle
+- `src/artemis/agents/` — Q-learning, model-based VI, UCB, Thompson
+- `src/artemis/experiments.py` — `run_experiment`, `run_sweep`, `save_json` (imported by the notebook)
+
+## Design notes
+
+- Discount `γ=0.999` is used for planning and Q targets (adjust in the notebook and/or agent constructors).
+- Optimal `V*(s0)` for regret comes from the **true** tabular `P, R̄`.
